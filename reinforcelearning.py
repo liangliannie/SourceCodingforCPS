@@ -10,6 +10,7 @@ import torch.optim as optim
 from torch.distributions import Categorical
 import matplotlib.pylab as plt
 import matplotlib
+import os
 from PIL import Image
 import torchvision.transforms as T
 
@@ -179,6 +180,9 @@ def main():
             # source coding here
             # What is the feedback value?
             state = uniform_midtread_quantizer(state, 1/2**stategy)
+
+
+
             # finish souce coding here
             if args.render:
                 env.render()
@@ -202,7 +206,16 @@ def main():
             print("Solved! Running reward is now {} and "
                   "the last episode runs to {} time steps!".format(running_reward, t))
             break
+        if i_episode % 50 == 0:
+            folder_path = os.path.join('/home/liang/PycharmProjects/SourceCoding/', 'model')
+            if not os.path.exists(folder_path):
+                os.makedirs(folder_path)
 
+            torch.save(policy.state_dict(), folder_path + '/policy_state_dict')
+            torch.save(quantizer.state_dict(), folder_path+'/quantizer_state_dict')
+
+    torch.save(policy.state_dict(), folder_path + '/policy_state_dict')
+    torch.save(quantizer.state_dict(), folder_path + '/quantizer_state_dict')
     print('Complete')
     env.close()
     plt.ioff()
