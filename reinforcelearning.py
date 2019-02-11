@@ -178,7 +178,7 @@ def main():
             stategy = select_strategy(state)
             state, reward, done, _ = env.step(action)
             # source coding here
-            # What is the feedback value?
+            # What is the feedback value/
             state = uniform_midtread_quantizer(state, 1/2**stategy)
 
 
@@ -186,8 +186,9 @@ def main():
             # finish souce coding here
             if args.render:
                 env.render()
-            policy.rewards.append(reward)
-            quantizer.rewards.append(-stategy)
+            rr = reward*0.99 - stategy*0.01
+            policy.rewards.append(rr)
+            quantizer.rewards.append(rr)
             if done:
                 break
 

@@ -46,7 +46,7 @@ env = gym.make('CartPole-v0')
 for i_episode in range(20):
     state = env.reset()
     bits = []
-    for t in range(100):
+    for t in range(150):
 
         env.render()
         stategy = select_strategy(state)
