@@ -186,8 +186,8 @@ def main():
             # finish souce coding here
             if args.render:
                 env.render()
-            rr = reward*0.99 - stategy*0.01
-            policy.rewards.append(rr)
+            rr = reward*0.5 - stategy*0.5
+            policy.rewards.append(reward)
             quantizer.rewards.append(rr)
             if done:
                 break
