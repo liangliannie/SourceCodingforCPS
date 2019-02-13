@@ -42,8 +42,8 @@ if is_ipython:
 class Policy(nn.Module):
     def __init__(self):
         super(Policy, self).__init__()
-        self.affine1 = nn.Linear(4, 128)
-        self.affine2 = nn.Linear(128, 2)
+        self.affine1 = nn.Linear(8, 256)
+        self.affine2 = nn.Linear(256, 2)
 
         self.saved_log_probs = []
         self.rewards = []
@@ -59,8 +59,8 @@ class Quantizer(nn.Module):
 
     def __init__(self):
         super(Quantizer, self).__init__()
-        self.affine1 = nn.Linear(4, 128)
-        self.affine2 = nn.Linear(128, 8)
+        self.affine1 = nn.Linear(4, 256)
+        self.affine2 = nn.Linear(256, 8)
 
         self.saved_log_probs = []
         self.rewards = []
@@ -73,9 +73,12 @@ class Quantizer(nn.Module):
 
 
 policy = Policy()
-quantizer = Quantizer()
+quantizer1 = Quantizer()
+quantizer2 = Quantizer()
+
 optimizer = optim.Adam(policy.parameters(), lr=1e-2)
-optimizer_q = optim.Adam(policy.parameters(), lr=1e-2)
+optimizer_q1 = optim.Adam(quantizer1.parameters(), lr=1e-2)
+optimizer_q2 = optim.Adam(quantizer2.parameters(), lr=1e-2)
 
 eps = np.finfo(np.float32).eps.item()
 
@@ -89,12 +92,21 @@ def select_action(state):
     return action.item()
 
 
-def select_strategy(state):
+def select_strategy1(state):
     state = torch.from_numpy(state).float().unsqueeze(0)
-    probs = quantizer(state)
+    probs = quantizer1(state)
     m = Categorical(probs)
     action = m.sample()
-    quantizer.saved_log_probs.append(m.log_prob(action))
+    quantizer1.saved_log_probs.append(m.log_prob(action))
+    return action.item()
+
+
+def select_strategy2(state):
+    state = torch.from_numpy(state).float().unsqueeze(0)
+    probs = quantizer2(state)
+    m = Categorical(probs)
+    action = m.sample()
+    quantizer2.saved_log_probs.append(m.log_prob(action))
     return action.item()
 
 def finish_episode():
@@ -117,23 +129,41 @@ def finish_episode():
 
 
 
-def quantizer_finish_episode():
+def quantizer1_finish_episode():
     R = 0
     quantizer_loss = []
     rewards = []
-    for r in quantizer.rewards[::-1]:
+    for r in quantizer1.rewards[::-1]:
         R = r + args.gamma * R
         rewards.insert(0, R)
     rewards = torch.tensor(rewards)
     rewards = (rewards - rewards.mean()) / (rewards.std() + eps)
-    for log_prob, reward in zip(quantizer.saved_log_probs, rewards):
+    for log_prob, reward in zip(quantizer1.saved_log_probs, rewards):
         quantizer_loss.append(-log_prob * reward)
-    optimizer_q.zero_grad()
+    optimizer_q1.zero_grad()
     quantizer_loss = torch.cat(quantizer_loss).sum()
     quantizer_loss.backward()
-    optimizer_q.step()
-    del quantizer.rewards[:]
-    del quantizer.saved_log_probs[:]
+    optimizer_q1.step()
+    del quantizer1.rewards[:]
+    del quantizer1.saved_log_probs[:]
+
+def quantizer2_finish_episode():
+    R = 0
+    quantizer_loss = []
+    rewards = []
+    for r in quantizer2.rewards[::-1]:
+        R = r + args.gamma * R
+        rewards.insert(0, R)
+    rewards = torch.tensor(rewards)
+    rewards = (rewards - rewards.mean()) / (rewards.std() + eps)
+    for log_prob, reward in zip(quantizer2.saved_log_probs, rewards):
+        quantizer_loss.append(-log_prob * reward)
+    optimizer_q1.zero_grad()
+    quantizer_loss = torch.cat(quantizer_loss).sum()
+    quantizer_loss.backward()
+    optimizer_q1.step()
+    del quantizer2.rewards[:]
+    del quantizer2.saved_log_probs[:]
 
 
 episode_durations = []
@@ -147,15 +177,37 @@ def plot_durations():
     plt.ylabel('Duration')
     plt.plot(durations_t.numpy())
     # Take 100 episode averages and plot them too
-    if len(durations_t) >= 100:
-        means = durations_t.unfold(0, 100, 1).mean(1).view(-1)
-        means = torch.cat((torch.zeros(99), means))
+    if len(durations_t) >= 5:
+        means = durations_t.unfold(0, 5, 1).mean(1).view(-1)
+        means = torch.cat((torch.zeros(4), means))
         plt.plot(means.numpy())
 
     plt.pause(0.001)  # pause a bit so that plots are updated
     if is_ipython:
         display.clear_output(wait=True)
         display.display(plt.gcf())
+
+episode_strategies = []
+
+def plot_strategies():
+    plt.figure(3)
+    plt.clf()
+    durations_s = torch.tensor(episode_strategies, dtype=torch.float)
+    plt.title('Training...')
+    plt.xlabel('Episode')
+    plt.ylabel('Strategies')
+    plt.plot(durations_s.numpy())
+    # Take 100 episode averages and plot them too
+    if len(durations_s) >= 5:
+        means = durations_s.unfold(0, 5, 1).mean(1).view(-1)
+        means = torch.cat((torch.zeros(4), means))
+        plt.plot(means.numpy())
+
+    plt.pause(0.001)  # pause a bit so that plots are updated
+    if is_ipython:
+        display.clear_output(wait=True)
+        display.display(plt.gcf())
+
 
 def uniform_midtread_quantizer(x, Q):
     # limiter
@@ -170,25 +222,41 @@ def main():
     plt.ion()
     running_reward = 10
     env.reset()
+    c1,c2 = [1,1,1,1],[1,1,1,1]
     for i_episode in count(1):
         state = env.reset()
+        feedback1 = np.zeros(state.shape)
+        feedback2 = np.zeros(state.shape)
         for t in range(10000):  # Don't infinite loop while learning
             # env.render()
-            action = select_action(state)
-            stategy = select_strategy(state)
+            # Begin source coding here
+            # encoder:
+            encoder_state1 = c1*state - feedback1
+            encoder_state2 = c2*state - feedback2
+            stategy1 = select_strategy1(encoder_state1) # learn f_encoder
+            quantized_state1 = uniform_midtread_quantizer(encoder_state1, 1 / 2 ** stategy1)
+            stategy2 = select_strategy2(encoder_state2)  # learn f_encoder
+            quantized_state2 = uniform_midtread_quantizer(encoder_state2, 1 / 2 ** stategy2)
+            # feedback:
+            feedback1 = quantized_state1 + feedback1
+            feedback2 = quantized_state2 + feedback2
+            # print(feedback)
+            control_state = np.stack([feedback1, feedback2]).flatten()
+            control_state = np.stack([state, state]).flatten()
+
+            # Controller:
+            action = select_action(control_state) # learn f_decoder
             state, reward, done, _ = env.step(action)
-            # source coding here
-            # What is the feedback value/
-            state = uniform_midtread_quantizer(state, 1/2**stategy)
-
-
-
-            # finish souce coding here
+            # reward = reward -(abs(state[2]))
+            # if done:
+            #     print(reward)
+            # finish source coding here
             if args.render:
                 env.render()
-            rr = reward*0.5 - stategy*0.5
-            policy.rewards.append(reward)
-            quantizer.rewards.append(rr)
+            rr = reward #- stategy1*0.1-stategy2*0.1
+            policy.rewards.append(rr)
+            quantizer1.rewards.append(rr)
+            quantizer2.rewards.append(rr)
             if done:
                 break
 
@@ -196,9 +264,12 @@ def main():
 
 
         finish_episode()
-        quantizer_finish_episode()
-        episode_durations.append(t + 1)
+        quantizer1_finish_episode()
+        quantizer2_finish_episode()
 
+        episode_durations.append(t + 1)
+        episode_strategies.append(stategy1+stategy2)
+        plot_strategies()
         plot_durations() # Plot the durations
         if i_episode % args.log_interval == 0:
             print('Episode {}\tLast length: {:5d}\tAverage length: {:.2f}'.format(
@@ -213,11 +284,20 @@ def main():
                 os.makedirs(folder_path)
 
             torch.save(policy.state_dict(), folder_path + '/policy_state_dict')
-            torch.save(quantizer.state_dict(), folder_path+'/quantizer_state_dict')
+            torch.save(quantizer1.state_dict(), folder_path+'/quantizer1_state_dict')
+            torch.save(quantizer2.state_dict(), folder_path + '/quantizer2_state_dict')
 
     torch.save(policy.state_dict(), folder_path + '/policy_state_dict')
-    torch.save(quantizer.state_dict(), folder_path + '/quantizer_state_dict')
+    torch.save(quantizer1.state_dict(), folder_path + '/quantizer1_state_dict')
+    torch.save(quantizer2.state_dict(), folder_path + '/quantizer2_state_dict')
     print('Complete')
+    import pickle
+    duration = open('duration2.pickle', 'wb')
+    pickle.dump(episode_durations, duration)
+    duration.close()
+    strategies = open('strategies2.pickle','wb')
+    pickle.dump(episode_strategies, strategies)
+    strategies.close()
     env.close()
     plt.ioff()
     plt.show()
